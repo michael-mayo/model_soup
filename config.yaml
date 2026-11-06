@@ -1,0 +1,28 @@
+# Central configuration for the soup project.
+
+app:
+  name: soup
+  environment: development
+
+paths:
+  input: data/input
+  output: data/output
+  scratch: scratch
+  downloads: scratch/downloads
+  datasets: scratch/datasets
+
+logging:
+  level: INFO
+  format: "%(asctime)s %(levelname)s %(name)s: %(message)s"
+
+runtime:
+  workers: 1
+  dry_run: false
+
+datasets:
+  fracatlas:
+    url: https://ndownloader.figshare.com/files/43283628
+  kvasir:
+    url: https://datasets.simula.no/downloads/kvasir-seg.zip
+  bccd:
+    url: https://github.com/Shenggan/BCCD_Dataset/archive/refs/heads/master.tar.gz
