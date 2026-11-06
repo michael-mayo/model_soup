@@ -27,7 +27,7 @@ CLASS_IDS = {name.lower(): index for index, name in enumerate(CLASS_NAMES)}
 
 def load_settings(config_path: Path = CONFIG_PATH) -> tuple[dict[str, Any], dict[str, Any]]:
     config = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
-    return config, config.get("datasets", {}).get("bccd", {})
+    return config, config.get("dataset", {}).get("bccd", {})
 
 
 def _ca_bundle() -> Path | None:

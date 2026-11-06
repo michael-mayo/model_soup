@@ -44,3 +44,15 @@ conda run -n soup python dataset_fracatlas.py --insecure
 conda run -n soup python dataset_kvasir.py --insecure
 conda run -n soup python dataset_bccd.py --insecure
 ```
+
+Train the three baseline models after preparing the datasets:
+
+```bash
+conda run -n soup python dataset_trainer.py
+```
+
+Training settings and configured model paths are in `config.yaml` under
+`dataset.trainer`. Ultralytics run artifacts are stored under each dataset's
+`scratch/datasets/<dataset>/runs/` directory, and copied baseline checkpoints
+are stored under its `models/` directory. Pretrained Ultralytics weights are
+downloaded to `scratch/weights/`.

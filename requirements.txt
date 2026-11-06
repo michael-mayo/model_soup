@@ -1,3 +1,4 @@
 # Runtime dependencies for the soup project.
 # Add pinned packages here as they are installed in the soup conda environment.
 PyYAML==6.0.3
+ultralytics

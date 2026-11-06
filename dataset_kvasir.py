@@ -27,7 +27,7 @@ SPLITS = ("train", "val", "test")
 
 def load_settings(config_path: Path = CONFIG_PATH) -> tuple[dict[str, Any], dict[str, Any]]:
     config = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
-    return config, config.get("datasets", {}).get("kvasir", {})
+    return config, config.get("dataset", {}).get("kvasir", {})
 
 
 def _ca_bundle() -> Path | None:

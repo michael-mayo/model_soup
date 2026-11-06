@@ -33,7 +33,7 @@ def load_settings(config_path: Path = CONFIG_PATH) -> dict:
     """Load the FracAtlas settings from the central project configuration."""
 
     config = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
-    return config.get("datasets", {}).get("fracatlas", {})
+    return config.get("dataset", {}).get("fracatlas", {})
 
 
 def _download(url: str, destination: Path, *, verify_ssl: bool = True) -> None:

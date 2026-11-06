@@ -19,10 +19,44 @@ runtime:
   workers: 1
   dry_run: false
 
-datasets:
+dataset:
   fracatlas:
     url: https://ndownloader.figshare.com/files/43283628
   kvasir:
     url: https://datasets.simula.no/downloads/kvasir-seg.zip
   bccd:
     url: https://github.com/Shenggan/BCCD_Dataset/archive/refs/heads/master.tar.gz
+  trainer:
+    model: yolo26n.pt
+    optimizer: MuSGD
+    lr0: 0.01
+    epochs: 3
+    patience: 15
+    # Measured at 1.25 GiB for batch 8. At 85% of a 12 GiB GPU this gives an
+    # estimated limit of about 65, so use the practical power-of-two value.
+    batch: 64
+    imgsz: 640
+    device: 0
+    # Keep dataloading in-process; multiprocessing added memory pressure and
+    # leaked semaphore warnings when the process was killed.
+    workers: 0
+    amp: true
+    seed: 0
+    plots: true
+    verbose: true
+    run_name: baseline_3epochs
+    exist_ok: true
+    weights_dir: scratch/weights
+    datasets:
+      fracatlas:
+        data_yaml: scratch/datasets/fracatlas/yolo/data.yaml
+        model_path: scratch/datasets/fracatlas/models/{run_name}.pt
+        runs_dir: scratch/datasets/fracatlas/runs
+      kvasir:
+        data_yaml: scratch/datasets/kvasir/yolo/data.yaml
+        model_path: scratch/datasets/kvasir/models/{run_name}.pt
+        runs_dir: scratch/datasets/kvasir/runs
+      bccd:
+        data_yaml: scratch/datasets/bccd/yolo/data.yaml
+        model_path: scratch/datasets/bccd/models/{run_name}.pt
+        runs_dir: scratch/datasets/bccd/runs
