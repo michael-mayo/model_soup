@@ -8,7 +8,7 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
-from dataset import CONFIG_PATH, IMAGE_SUFFIXES, Dataset, SPLITS
+from dataset import IMAGE_SUFFIXES, Dataset, SPLITS
 
 
 DEFAULT_URL = "https://data.mendeley.com/public-api/zip/c4hhrkxytw/download/4"
@@ -144,18 +144,5 @@ class DatasetDentalOpg(Dataset):
         return self._prepare_yolo(raw_root, output_root) if coco_result is None else self._prepare_coco(raw_root, output_root, *coco_result)
 
 
-def load_settings(config_path: Path = CONFIG_PATH) -> tuple[dict, dict]:
-    dataset = DatasetDentalOpg(config_path)
-    return dataset.config, dataset.settings
-
-
-def prepare(config_path: Path = CONFIG_PATH, *, force: bool = False, verify_ssl: bool | None = None) -> Path:
-    return DatasetDentalOpg(config_path).prepare(force=force, verify_ssl=verify_ssl)
-
-
-def main() -> int:
-    return DatasetDentalOpg().cli()
-
-
 if __name__ == "__main__":
-    raise SystemExit(main())
+    raise SystemExit(DatasetDentalOpg().cli())

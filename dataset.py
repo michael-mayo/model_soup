@@ -16,7 +16,7 @@ from typing import Any, ClassVar
 
 import yaml
 
-import log
+from log import Log
 
 
 CONFIG_PATH = Path(__file__).with_name("config.yaml")
@@ -54,7 +54,7 @@ class Dataset(ABC):
         return path if path.is_absolute() else self.project_root / path
 
     def _log(self, message: str) -> None:
-        log.message(self.module_name, message)
+        Log.message(self.module_name, message)
 
     def _ca_bundle(self) -> Path | None:
         candidates = list((Path(sys.prefix) / "lib").glob("python*/site-packages/pip/_vendor/certifi/cacert.pem"))
@@ -220,6 +220,6 @@ class Dataset(ABC):
         try:
             self.prepare(force=args.force, verify_ssl=False if args.insecure else None)
         except (OSError, ValueError, tarfile.TarError, zipfile.BadZipFile, KeyError, TypeError) as exc:
-            log.error(self.module_name, str(exc))
+            Log.error(self.module_name, str(exc))
             return 1
         return 0

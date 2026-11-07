@@ -6,7 +6,7 @@ import csv
 import shutil
 from pathlib import Path
 
-from dataset import CONFIG_PATH, IMAGE_SUFFIXES, SPLITS, Dataset
+from dataset import IMAGE_SUFFIXES, SPLITS, Dataset
 
 
 DEFAULT_URL = "https://ndownloader.figshare.com/files/43283628"
@@ -62,17 +62,5 @@ class DatasetFracAtlas(Dataset):
         return counts, {0: "fracture"}
 
 
-def load_settings(config_path: Path = CONFIG_PATH) -> dict:
-    return DatasetFracAtlas(config_path).settings
-
-
-def prepare(config_path: Path = CONFIG_PATH, *, force: bool = False, verify_ssl: bool | None = None) -> Path:
-    return DatasetFracAtlas(config_path).prepare(force=force, verify_ssl=verify_ssl)
-
-
-def main() -> int:
-    return DatasetFracAtlas().cli()
-
-
 if __name__ == "__main__":
-    raise SystemExit(main())
+    raise SystemExit(DatasetFracAtlas().cli())

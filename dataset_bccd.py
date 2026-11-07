@@ -7,7 +7,7 @@ import shutil
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
-from dataset import CONFIG_PATH, Dataset, SPLITS
+from dataset import Dataset, SPLITS
 
 
 DEFAULT_URL = "https://github.com/Shenggan/BCCD_Dataset/archive/refs/heads/master.tar.gz"
@@ -88,18 +88,5 @@ class DatasetBccd(Dataset):
         return counts, {index: name for index, name in enumerate(CLASS_NAMES)}
 
 
-def load_settings(config_path: Path = CONFIG_PATH) -> tuple[dict, dict]:
-    dataset = DatasetBccd(config_path)
-    return dataset.config, dataset.settings
-
-
-def prepare(config_path: Path = CONFIG_PATH, *, force: bool = False, verify_ssl: bool | None = None) -> Path:
-    return DatasetBccd(config_path).prepare(force=force, verify_ssl=verify_ssl)
-
-
-def main() -> int:
-    return DatasetBccd().cli()
-
-
 if __name__ == "__main__":
-    raise SystemExit(main())
+    raise SystemExit(DatasetBccd().cli())

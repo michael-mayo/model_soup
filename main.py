@@ -5,8 +5,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-import log
-import soup
+from log import Log
+from soup import Soup
 import yaml
 
 
@@ -27,20 +27,20 @@ def main() -> int:
     try:
         config = load_config()
     except (OSError, ValueError) as exc:
-        log.error(__file__, f"could not read config.yaml: {exc}")
+        Log.error(__file__, f"could not read config.yaml: {exc}")
         return 1
 
-    log.message(__file__, "system initialising")
+    Log.message(__file__, "system initialising")
     for line in yaml.safe_dump(config, sort_keys=False).rstrip().splitlines():
-        log.message(__file__, line)
+        Log.message(__file__, line)
 
     try:
-        soup.validate(CONFIG_PATH.parent, config)
+        Soup().validate(CONFIG_PATH.parent, config)
     except (FileNotFoundError, RuntimeError, ValueError, OSError) as exc:
-        log.error(__file__, f"soup validation failed: {exc}")
+        Log.error(__file__, f"soup validation failed: {exc}")
         return 1
 
-    log.message(__file__, "complete")
+    Log.message(__file__, "complete")
     return 0
 
 

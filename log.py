@@ -10,21 +10,19 @@ from typing import TextIO
 MODULE_WIDTH = 24
 
 
-def _module_label(module_name: str | Path) -> str:
-    """Return a filename-based, padded module label."""
+class Log:
+    """Console logging helpers for the soup application."""
 
-    return f"[{Path(module_name).stem}]".ljust(MODULE_WIDTH)
+    @staticmethod
+    def _module_label(module_name: str | Path) -> str:
+        return f"[{Path(module_name).stem}]".ljust(MODULE_WIDTH)
 
+    @staticmethod
+    def message(module_name: str | Path, text: str, *, stream: TextIO | None = None) -> None:
+        destination = stream or sys.stdout
+        print(f"{Log._module_label(module_name)} {text}", file=destination, flush=True)
 
-def message(module_name: str | Path, text: str, *, stream: TextIO | None = None) -> None:
-    """Write one consistently formatted application message."""
-
-    destination = stream or sys.stdout
-    print(f"{_module_label(module_name)} {text}", file=destination, flush=True)
-
-
-def error(module_name: str | Path, text: str, *, stream: TextIO | None = None) -> None:
-    """Write one consistently formatted error message."""
-
-    destination = stream or sys.stderr
-    print(f"{_module_label(module_name)} {text}", file=destination, flush=True)
+    @staticmethod
+    def error(module_name: str | Path, text: str, *, stream: TextIO | None = None) -> None:
+        destination = stream or sys.stderr
+        print(f"{Log._module_label(module_name)} {text}", file=destination, flush=True)

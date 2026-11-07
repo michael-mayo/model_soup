@@ -3,8 +3,8 @@
 soup:
   #baseline_model: scratch/datasets/fracatlas/models/baseline_300epochs.pt
   #baseline_model: scratch/datasets/kvasir/models/baseline_300epochs.pt
-  baseline_model: scratch/datasets/dental_opg/models/baseline_300epochs.pt
   #baseline_model: scratch/datasets/bccd/models/baseline_300epochs.pt
+  baseline_model: scratch/datasets/dental_opg/models/baseline_300epochs.pt
 
 paths:
   downloads: scratch/downloads
@@ -41,6 +41,9 @@ dataset:
     exist_ok: true
     weights_dir: scratch/weights
     datasets_to_train:
+      - fracatlas
+      - kvasir
+      - bccd
       - dental_opg
     datasets:
       fracatlas:

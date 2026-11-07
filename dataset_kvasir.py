@@ -7,7 +7,7 @@ import shutil
 from pathlib import Path
 from typing import Any
 
-from dataset import CONFIG_PATH, IMAGE_SUFFIXES, Dataset
+from dataset import IMAGE_SUFFIXES, Dataset
 
 
 DEFAULT_URL = "https://datasets.simula.no/downloads/kvasir-seg.zip"
@@ -82,18 +82,5 @@ class DatasetKvasir(Dataset):
         return counts, {0: "polyp"}
 
 
-def load_settings(config_path: Path = CONFIG_PATH) -> tuple[dict, dict]:
-    dataset = DatasetKvasir(config_path)
-    return dataset.config, dataset.settings
-
-
-def prepare(config_path: Path = CONFIG_PATH, *, force: bool = False, verify_ssl: bool | None = None) -> Path:
-    return DatasetKvasir(config_path).prepare(force=force, verify_ssl=verify_ssl)
-
-
-def main() -> int:
-    return DatasetKvasir().cli()
-
-
 if __name__ == "__main__":
-    raise SystemExit(main())
+    raise SystemExit(DatasetKvasir().cli())
