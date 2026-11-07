@@ -46,7 +46,7 @@ conda run -n soup python dataset_kvasir.py --insecure
 conda run -n soup python dataset_bccd.py --insecure
 ```
 
-Train the three baseline models after preparing the datasets:
+Train the four baseline models after preparing the datasets:
 
 ```bash
 conda run -n soup python dataset_trainer.py
@@ -59,8 +59,8 @@ are stored under its `models/` directory. Pretrained Ultralytics weights are
 downloaded to `scratch/weights/`.
 
 The datasets selected for training are configured with
-`dataset.trainer.datasets_to_train`. The default configuration trains only
-`dental_opg`; use `--dataset` more than once to override the selection for a
+`dataset.trainer.datasets_to_train`. The default configuration trains all four
+datasets; use `--dataset` more than once to override the selection for a
 single command, for example:
 
 ```bash
