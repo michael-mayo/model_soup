@@ -173,14 +173,21 @@ def _train_dataset(project_root: Path, dataset_name: str, settings: dict[str, An
     }
 
 
-def train_all(config_path: Path = CONFIG_PATH, selected: str | None = None) -> list[dict[str, str]]:
+def train_all(
+    config_path: Path = CONFIG_PATH,
+    selected: list[str] | str | None = None,
+) -> list[dict[str, str]]:
     project_root, trainer = load_settings(config_path)
     datasets = trainer.get("datasets", {})
-    defaults = {key: value for key, value in trainer.items() if key != "datasets"}
-    if selected:
-        if selected not in datasets:
-            raise KeyError(f"dataset not configured: {selected}")
-        datasets = {selected: datasets[selected]}
+    defaults = {key: value for key, value in trainer.items() if key not in {"datasets", "datasets_to_train"}}
+    selected_names = selected or trainer.get("datasets_to_train")
+    if isinstance(selected_names, str):
+        selected_names = [selected_names]
+    if selected_names:
+        missing = [name for name in selected_names if name not in datasets]
+        if missing:
+            raise KeyError(f"dataset(s) not configured: {', '.join(missing)}")
+        datasets = {name: datasets[name] for name in selected_names}
 
     summary: list[dict[str, str]] = []
     for dataset_name, settings in datasets.items():
@@ -200,10 +207,15 @@ def train_all(config_path: Path = CONFIG_PATH, selected: str | None = None) -> l
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", type=Path, default=CONFIG_PATH)
-    parser.add_argument("--dataset", help="train only one configured dataset")
+    parser.add_argument(
+        "--dataset",
+        action="append",
+        dest="datasets",
+        help="train only the specified configured dataset; repeat for multiple datasets",
+    )
     args = parser.parse_args()
 
-    summary = train_all(args.config, args.dataset)
+    summary = train_all(args.config, args.datasets)
     print("\nBaseline training summary")
     print("=========================")
     for result in summary:

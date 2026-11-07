@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 import log
+import soup
 import yaml
 
 
@@ -32,6 +33,13 @@ def main() -> int:
     log.message(__file__, "system initialising")
     for line in yaml.safe_dump(config, sort_keys=False).rstrip().splitlines():
         log.message(__file__, line)
+
+    try:
+        soup.validate(CONFIG_PATH.parent, config)
+    except (FileNotFoundError, RuntimeError, ValueError, OSError) as exc:
+        log.error(__file__, f"soup validation failed: {exc}")
+        return 1
+
     log.message(__file__, "complete")
     return 0
 

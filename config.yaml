@@ -1,23 +1,14 @@
 # Central configuration for the soup project.
 
-app:
-  name: soup
-  environment: development
+soup:
+  #baseline_model: scratch/datasets/fracatlas/models/baseline_300epochs.pt
+  #baseline_model: scratch/datasets/kvasir/models/baseline_300epochs.pt
+  baseline_model: scratch/datasets/dental_opg/models/baseline_300epochs.pt
+  #baseline_model: scratch/datasets/bccd/models/baseline_300epochs.pt
 
 paths:
-  input: data/input
-  output: data/output
-  scratch: scratch
   downloads: scratch/downloads
   datasets: scratch/datasets
-
-logging:
-  level: INFO
-  format: "%(asctime)s %(levelname)s %(name)s: %(message)s"
-
-runtime:
-  workers: 1
-  dry_run: false
 
 dataset:
   fracatlas:
@@ -26,11 +17,13 @@ dataset:
     url: https://datasets.simula.no/downloads/kvasir-seg.zip
   bccd:
     url: https://github.com/Shenggan/BCCD_Dataset/archive/refs/heads/master.tar.gz
+  dental_opg:
+    url: https://data.mendeley.com/public-api/zip/c4hhrkxytw/download/4
   trainer:
     model: yolo26n.pt
     optimizer: MuSGD
     lr0: 0.01
-    epochs: 3
+    epochs: 300
     patience: 15
     # Measured at 1.25 GiB for batch 8. At 85% of a 12 GiB GPU this gives an
     # estimated limit of about 65, so use the practical power-of-two value.
@@ -44,9 +37,11 @@ dataset:
     seed: 0
     plots: true
     verbose: true
-    run_name: baseline_3epochs
+    run_name: baseline_300epochs
     exist_ok: true
     weights_dir: scratch/weights
+    datasets_to_train:
+      - dental_opg
     datasets:
       fracatlas:
         data_yaml: scratch/datasets/fracatlas/yolo/data.yaml
@@ -60,3 +55,7 @@ dataset:
         data_yaml: scratch/datasets/bccd/yolo/data.yaml
         model_path: scratch/datasets/bccd/models/{run_name}.pt
         runs_dir: scratch/datasets/bccd/runs
+      dental_opg:
+        data_yaml: scratch/datasets/dental_opg/yolo/data.yaml
+        model_path: scratch/datasets/dental_opg/models/{run_name}.pt
+        runs_dir: scratch/datasets/dental_opg/runs

@@ -24,12 +24,13 @@ conda run -n soup python main.py
 
 All application messages use the format `[module_name] message`.
 
-Prepare all three datasets in Ultralytics format with:
+Prepare datasets in Ultralytics format with:
 
 ```bash
 conda run -n soup python dataset_fracatlas.py
 conda run -n soup python dataset_kvasir.py
 conda run -n soup python dataset_bccd.py
+conda run -n soup python dataset_dental_opg.py
 ```
 
 Archives are stored in `scratch/downloads/`. Each dataset has its own directory
@@ -56,3 +57,12 @@ Training settings and configured model paths are in `config.yaml` under
 `scratch/datasets/<dataset>/runs/` directory, and copied baseline checkpoints
 are stored under its `models/` directory. Pretrained Ultralytics weights are
 downloaded to `scratch/weights/`.
+
+The datasets selected for training are configured with
+`dataset.trainer.datasets_to_train`. The default configuration trains only
+`dental_opg`; use `--dataset` more than once to override the selection for a
+single command, for example:
+
+```bash
+conda run -n soup python dataset_trainer.py --dataset dental_opg
+```
