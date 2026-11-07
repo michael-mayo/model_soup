@@ -62,6 +62,8 @@ class Dataset(ABC):
         return next((path for path in candidates if path.is_file() and path.stat().st_size > 1000), None)
 
     def _archive_is_valid(self, archive: Path) -> bool:
+        if not archive.is_file():
+            return False
         if self.archive_type == "zip":
             return zipfile.is_zipfile(archive)
         if self.archive_type == "tar":
