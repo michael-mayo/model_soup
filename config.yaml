@@ -22,7 +22,9 @@ training:
   optimizer: MuSGD
   lr0: 0.01
   epochs: 300
-  patience: 15
+  # FracAtlas val mAP is noisy (only 82 positive val images), so allow a long
+  # plateau before early stopping.
+  patience: 50
   # Measured at 1.25 GiB for batch 8. At 85% of a 12 GiB GPU this gives an
   # estimated limit of about 65, so use the practical power-of-two value.
   batch: 64

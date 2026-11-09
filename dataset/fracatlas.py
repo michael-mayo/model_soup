@@ -22,7 +22,7 @@ def _split_names(split_file: Path) -> set[str]:
         for row in csv.reader(stream):
             value = next((cell.strip() for cell in row if Path(cell.strip()).suffix.lower() in IMAGE_SUFFIXES), None)
             if value:
-                names.add(Path(value).stem.lower())
+                names.add(Path(value).name.lower())
     return names
 
 
@@ -52,5 +52,7 @@ class FracAtlas(Dataset):
         for image in images:
             label = unique(labels.get(image.stem.lower(), []), f"label for {image.name}")
             lines = label.read_text(encoding="utf-8").splitlines() if label else []
-            writer.add(self.split_for(image.stem, official), image, lines)
+            # Split by full file name (with extension) to keep the hash split
+            # identical to datasets prepared by earlier versions.
+            writer.add(self.split_for(image.name, official), image, lines)
         return {0: "fracture"}
