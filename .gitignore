@@ -1,2 +1,35 @@
-__pycache__/
+# Project data: downloads, datasets, runs, models, pretrained weights
 scratch/
+
+# Python build/cache artifacts
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Environments
+.venv/
+venv/
+env/
+.conda/
+
+# Secrets and local config
+.env
+*.local.yaml
+
+# Editor/OS clutter
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Notebooks, logs, temporary output
+.ipynb_checkpoints/
+*.log
+tmp/
