@@ -1,4 +1,4 @@
-"""Val-split evaluation shared by single models, ensembles and soups.
+"""Val- and test-split evaluation shared by single models, ensembles and soups.
 
 Every model or method is scored the same way. Each model's per-image val
 predictions are captured from Ultralytics' own validator and scored with the
@@ -63,7 +63,7 @@ class Predictions:
 
 @dataclass(frozen=True)
 class ClassMetrics:
-    """Val-split detection metrics for one class (or their macro average)."""
+    """Detection metrics on one split for one class (or their macro average)."""
 
     precision: float
     recall: float
@@ -73,10 +73,10 @@ class ClassMetrics:
 
 @dataclass(frozen=True)
 class EvaluationResult:
-    """Val-split metrics for one model or method.
+    """Metrics on one split for one model or method.
 
     `per_class` maps every class name to its metrics, or to `None` when the
-    val split has no instances of that class. `seconds` is the wall time to
+    split has no instances of that class. `seconds` is the time to
     produce all val predictions (for an ensemble, every member plus fusion).
     """
 
@@ -86,7 +86,7 @@ class EvaluationResult:
 
     @property
     def macro(self) -> ClassMetrics:
-        """Unweighted mean over the classes present in the val split."""
+        """Unweighted mean over the classes present in the split."""
 
         present = [metrics for metrics in self.per_class.values() if metrics is not None]
         if not present:
@@ -153,29 +153,30 @@ def _match(detections: Detections, true_classes: np.ndarray, true_boxes: np.ndar
 
 
 class Evaluator:
-    """Predict on and score the val split of one dataset."""
+    """Predict on and score one split (val or test) of one dataset."""
 
-    def __init__(self, data_yaml: Path, settings: RunSettings) -> None:
-        """Index the val images and read the class names."""
+    def __init__(self, data_yaml: Path, settings: RunSettings, split: str = "val") -> None:
+        """Index the split's images and read the class names."""
 
         self.data_yaml = data_yaml
         self.settings = settings
-        self.images = split_images(data_yaml, "val")
+        self.split = split
+        self.images = split_images(data_yaml, split)
         if not self.images:
-            raise FileNotFoundError(f"no val images found for {data_yaml}")
+            raise FileNotFoundError(f"no {split} images found for {data_yaml}")
         names = yaml.safe_load(data_yaml.read_text(encoding="utf-8"))["names"]
         self.names: dict[int, str] = dict(names) if isinstance(names, dict) else dict(enumerate(names))
         self._order: list[str] | None = None  # val image files, fixed by the first prediction pass
         self._targets: list[tuple[np.ndarray, np.ndarray]] | None = None
 
     def predict(self, model_path: Path) -> Predictions:
-        """Run one model over the val split with Ultralytics' own validator.
+        """Run one model over the split with Ultralytics' own validator.
 
         The validator's per-image predictions and targets are captured (scaled
         back to original-image pixels) instead of being reduced to metrics, so
         a single model scores exactly as `model.val()` does and ensembles can
         fuse the same predictions. The time is the validator's measured
-        preprocess + inference + postprocess time over all val images, which
+        preprocess + inference + postprocess time over all the split's images, which
         excludes model loading and warm-up. Ultralytics output is suppressed.
         """
 
@@ -208,7 +209,7 @@ class Evaluator:
         try:
             with yolo.quiet():
                 results = yolo.load_model(model_path).val(
-                    data=str(self.data_yaml), split="val", plots=False, verbose=False,
+                    data=str(self.data_yaml), split=self.split, plots=False, verbose=False,
                     conf=PREDICT_CONF, max_det=MAX_DETECTIONS, **self.settings.eval_kwargs(),
                 )
         finally:
@@ -224,7 +225,7 @@ class Evaluator:
         return Predictions([detections[image] for image in order], per_image_ms * len(order) / 1000)
 
     def score(self, name: str, predictions: Predictions) -> EvaluationResult:
-        """Compute per-class P, R, mAP50 and mAP50-95 for a set of val predictions."""
+        """Compute per-class P, R, mAP50 and mAP50-95 for a set of predictions on the split."""
 
         from ultralytics.utils.metrics import ap_per_class
 
@@ -256,53 +257,64 @@ class Evaluator:
         return self.score(name, predictions), predictions
 
 
-# Column headers shared by both result tables.
+@dataclass(frozen=True)
+class ReportRow:
+    """One summary row: a model or method scored on val and, if available, test."""
+
+    name: str
+    val: EvaluationResult
+    test: EvaluationResult | None = None
+
+
+# Metric columns repeated for each split in the summary.
 METRIC_HEADERS = ("P", "R", "mAP50", "mAP50-95")
 
 
-def _metric_cells(metrics: ClassMetrics | None) -> tuple[str, ...]:
-    """Format one row's metric cells, or dashes for a class absent from val."""
+def _metric_cells(result: EvaluationResult | None) -> tuple[str, ...]:
+    """Format a result's macro-averaged metrics, or dashes when there is no result."""
 
-    if metrics is None:
+    if result is None:
         return ("-",) * len(METRIC_HEADERS)
-    return tuple(f"{value:.4f}" for value in (metrics.precision, metrics.recall, metrics.map50, metrics.map50_95))
+    macro = result.macro
+    return tuple(f"{value:.4f}" for value in (macro.precision, macro.recall, macro.map50, macro.map50_95))
 
 
-def _table(headers: Sequence[str], rows: Sequence[Sequence[str]], *, text_columns: int = 1) -> list[str]:
-    """Format rows with the first `text_columns` left-aligned and the rest right-aligned."""
+def log_summary(rows: Sequence[ReportRow], notes: Sequence[str] = ()) -> None:
+    """Log the summary table: macro-averaged val (and test) metrics and val time per model.
 
-    widths = [max(len(str(cell)) for cell in column) for column in zip(headers, *rows)]
-    lines = []
-    for row in (headers, *rows):
-        cells = [
-            str(cell).ljust(width) if index < text_columns else str(cell).rjust(width)
-            for index, (cell, width) in enumerate(zip(row, widths))
-        ]
-        lines.append("  ".join(cells))
-    lines.insert(1, "  ".join("-" * width for width in widths))
-    return lines
-
-
-def log_tables(results: Sequence[EvaluationResult], notes: Sequence[str] = ()) -> None:
-    """Log the per-model per-class table, then the macro-averaged summary last.
-
-    All scores are on the val split. The summary averages each metric over
-    the classes present in val, without weighting by instance count, and adds
-    the val time in seconds. `notes` are logged under the summary.
+    Each metric is an unweighted mean over the classes present in the split.
+    The test columns appear only when rows have test results (the dataset has
+    a test split). A group header above the column headers labels the split
+    of each column group. `notes` are logged under the table.
     """
 
-    LOG.message("per-class val metrics")
-    rows = []
-    for result in results:
-        for index, (class_name, metrics) in enumerate(result.per_class.items()):
-            # Show the model name only on its first row so groups stand out.
-            rows.append((result.name if index == 0 else "", class_name, *_metric_cells(metrics)))
-    for line in _table(("model", "class", *METRIC_HEADERS), rows, text_columns=2):
-        LOG.message(f"  {line}")
+    splits = ["val", "test"] if any(row.test is not None for row in rows) else ["val"]
+    headers = ("model", *METRIC_HEADERS * len(splits), "val time (s)")
+    body = [
+        (row.name, *(cell for split in splits for cell in _metric_cells(getattr(row, split))),
+         f"{row.val.seconds:.3f}")
+        for row in rows
+    ]
+    widths = [max(len(str(cell)) for cell in column) for column in zip(headers, *body)]
+    gap = "  "
 
-    LOG.message("summary: macro-averaged val metrics")
-    summary = [(r.name, *_metric_cells(r.macro), f"{r.seconds:.3f}") for r in results]
-    for line in _table(("model", *METRIC_HEADERS, "val time (s)"), summary):
+    def span(first: int, count: int, label: str) -> str:
+        width = sum(widths[first:first + count]) + len(gap) * (count - 1)
+        return f" {label} ".center(width, "-")
+
+    metrics = len(METRIC_HEADERS)
+    groups = gap.join([" " * widths[0], *(span(1 + index * metrics, metrics, split)
+                                          for index, split in enumerate(splits))])
+    lines = [groups.rstrip()]
+    for row in (headers, *body):
+        lines.append(gap.join(
+            str(cell).ljust(width) if index == 0 else str(cell).rjust(width)
+            for index, (cell, width) in enumerate(zip(row, widths))
+        ))
+    lines.insert(2, gap.join("-" * width for width in widths))
+
+    LOG.message("summary: macro-averaged metrics")
+    for line in lines:
         LOG.message(f"  {line}")
     for note in notes:
         LOG.message(f"  {note}")

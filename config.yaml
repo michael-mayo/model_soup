@@ -7,17 +7,19 @@ soup:
   # datasets. Every model is validated on the dataset's val split.
   baseline_model: /home/lonrix/model_soup/scratch/datasets/dental_opg/models/baseline_300epochs.pt
   dataset: /home/lonrix/model_soup/scratch/datasets/dental_opg/yolo/data.yaml
-  # Soup members are written here as bag<i>_<config>.pt. A member whose file
-  # already exists is reused, not retrained; delete it to retrain.
+  # Soup members are written here as bag<i>_<config>_e<epoch>.pt. A fine-tune
+  # whose checkpoints all exist is reused, not retrained; delete any of them
+  # to retrain it.
   output_dir: scratch/current_soup
 
   # Bagging and fine-tuning, shared by every member.
-  lr0: 0.002                # much lower than the baseline lr0: fine-tuning only
-  bagging_fraction: 0.8     # share of training images per bag (sampled without replacement)
+  lr0: 0.001                # much lower than the baseline lr0: fine-tuning only
+  bagging_fraction: 0.9     # share of training images per bag (sampled without replacement)
   bagging_iterations: 2     # bags drawn; each is fine-tuned once per config file
   seed: 42                  # bag sampling and training seed
-  epochs: 10
-  close_mosaic: 2           # final epochs trained without mosaic (0 keeps it on throughout)
+  epochs: 50
+  close_mosaic: 5           # final epochs trained without mosaic (0 keeps it on throughout)
+  checkpoint_interval: 10   # save a member every N epochs plus the final epoch (0 = final epoch only)
 
   # Ultralytics run settings for fine-tuning and validation (Ultralytics'
   # console output is always hidden; each member gets one summary line).
@@ -34,7 +36,8 @@ soup:
   wbf_iou: 0.55                 # ensemble/WBF: IoU above which boxes are fused
   bn_recalibration_images: 256  # training images used to re-estimate BatchNorm statistics of soups (0 = off)
 
-  # Augmentation config files; members = bagging_iterations x len(configs).
+  # Augmentation config files. Fine-tunes = bagging_iterations x len(configs);
+  # members = fine-tunes x checkpoints per fine-tune.
   configs:
     - soup_configs/lighting.yaml
     - soup_configs/camera.yaml

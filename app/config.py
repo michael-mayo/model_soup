@@ -110,6 +110,9 @@ class SoupConfig(RunSettings):
     directory means its data.yaml); neither needs to belong to the sample
     datasets. The inherited run settings apply to fine-tuning and validation.
 
+    Every `checkpoint_interval` epochs (and at the final epoch) each
+    fine-tune saves a checkpoint, and every checkpoint is a soup member.
+
     `nms_iou` and `wbf_iou` configure the two output ensembles, and
     `bn_recalibration_images` training images re-estimate the BatchNorm
     statistics of averaged soups (0 keeps the averaged statistics).
@@ -128,10 +131,17 @@ class SoupConfig(RunSettings):
     seed: int = 42
     epochs: int = 10
     close_mosaic: int = 2
+    checkpoint_interval: int = 10
     nms_iou: float = 0.7
     wbf_iou: float = 0.55
     bn_recalibration_images: int = 256
     configs: tuple[Path, ...] = ()
+
+    def checkpoint_epochs(self) -> list[int]:
+        """Epochs (1-based) after which a fine-tune saves a member checkpoint; always ends with `epochs`."""
+
+        interval = self.checkpoint_interval
+        return [*range(interval, self.epochs, interval), self.epochs] if interval else [self.epochs]
 
     def __post_init__(self) -> None:
         """Reject settings that cannot produce a soup."""
@@ -140,6 +150,8 @@ class SoupConfig(RunSettings):
             raise ValueError("soup.bagging_fraction must be in (0, 1]")
         if not (0.0 < self.nms_iou < 1.0 and 0.0 < self.wbf_iou < 1.0):
             raise ValueError("soup.nms_iou and soup.wbf_iou must be in (0, 1)")
+        if self.checkpoint_interval < 0:
+            raise ValueError("soup.checkpoint_interval must be 0 (final epoch only) or more")
         if self.bn_recalibration_images < 0:
             raise ValueError("soup.bn_recalibration_images must be 0 or more")
         if not 0 <= self.close_mosaic <= self.epochs:

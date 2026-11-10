@@ -10,7 +10,8 @@ diverse *soup members*: each trained on a different random subset of the data
 (bagging) with a different augmentation recipe. The members are then combined
 by output ensembling (NMS and weighted boxes fusion), which serve as baselines,
 and by weight averaging (uniform and greedy soups). Everything is compared on
-the val split, including how long each takes to validate.
+the val and test splits, including how long each takes to validate. Choices
+are made on val only, so test shows how well they hold up.
 
 The four bundled datasets are examples; any dataset can be added by writing a
 converter (see [Adding a dataset](#adding-a-dataset)).
@@ -58,7 +59,7 @@ Outputs go under `scratch/` (git-ignored):
 | `scratch/datasets/<dataset>/yolo/` | Ultralytics dataset (`data.yaml`, `train/`, `val/`, `test/`) |
 | `scratch/datasets/<dataset>/runs/<run_name>/` | Ultralytics training run (logs, plots, `weights/best.pt`) |
 | `scratch/datasets/<dataset>/models/<run_name>.pt` | Published copy of the run's best checkpoint |
-| `scratch/current_soup/bag<i>_<config>.pt` | Soup members (`soup.output_dir`) |
+| `scratch/current_soup/bag<i>_<config>_e<epoch>.pt` | Soup members: one per checkpoint epoch of each fine-tune (`soup.output_dir`) |
 | `scratch/current_soup/soup_uniform.pt`, `soup_greedy.pt` | Averaged soups, rebuilt on every run |
 
 ## Programs and command-line parameters
@@ -114,8 +115,8 @@ conda run --no-capture-output -n soup python main.py train --dataset dental_opg
 ### `main.py soup`
 
 Fine-tunes the soup members from the baseline model `soup.baseline_model`
-on the dataset `soup.dataset`, combines them, and validates everything on the
-val split.
+on the dataset `soup.dataset`, combines them, and evaluates everything on the
+val and test splits.
 
 Training steps:
 
@@ -124,22 +125,28 @@ Training steps:
    `soup.seed + bag number`.
 2. Each bag is fine-tuned once per augmentation config in `soup.configs`.
    Fine-tuning uses the soup's `lr0`, `epochs`, `seed`, `optimizer`, `batch`,
-   `imgsz`, `device`, `workers` and `amp`. The
-   defaults give 2 bags x 3 configs = 6 members, named
-   `bag<i>_<config file stem>.pt`.
-3. Mosaic stays on (at each config's `mosaic` probability) except for the
+   `imgsz`, `device`, `workers` and `amp`.
+3. Every `soup.checkpoint_interval` epochs, and at the final epoch, the
+   fine-tune's weights are saved as a separate member named
+   `bag<i>_<config file stem>_e<epoch>.pt`. The shipped `config.yaml` (2 bags
+   x 3 configs, 50 epochs, interval 10) gives 6 fine-tunes x 5 checkpoints = 30 members,
+   which gives the greedy soup more to choose from. Checkpoints are taken at
+   fixed epochs and never chosen by val score.
+4. Mosaic stays on (at each config's `mosaic` probability) except for the
    last `soup.close_mosaic` epochs (default 2). Ultralytics' own default of 10
    would turn it off for the whole fine-tune. Fine-tunes also set
    `warmup_epochs: 0`. An augmentation config may override either. Per-epoch
    validation is off and each member keeps its last-epoch weights, so the val
    split is never used to pick a checkpoint.
-4. Ultralytics run folders are written to a temporary directory next to
+5. Ultralytics run folders are written to a temporary directory next to
    `soup.output_dir` and deleted afterwards; only the member `.pt` files are
-   kept. Each member is saved to `soup.output_dir` as soon as it finishes.
-5. A member whose `.pt` file already exists in `soup.output_dir` is reused,
-   not retrained, so an interrupted run carries on where it stopped. To
-   retrain a member, delete its file. Bags are rebuilt from the same seed, so
-   a retrained member sees exactly the same images. Existing files are not
+   kept. A fine-tune's checkpoints are saved to `soup.output_dir` as soon as
+   it finishes.
+6. A fine-tune whose checkpoints all exist in `soup.output_dir` is reused,
+   not retrained, so an interrupted run carries on where it stopped. Deleting
+   any of its checkpoints retrains that fine-tune and rewrites all of them.
+   Bags are rebuilt from the same seed, so a retrained fine-tune sees exactly
+   the same images. Existing files are not
    checked against the current settings: after changing `lr0`, `epochs`,
    `bagging_fraction`, an augmentation config, the baseline or the dataset,
    delete the old members (or choose a new `output_dir`) to retrain them.
@@ -157,23 +164,32 @@ Combining and validation steps, in table order:
 5. **soup/greedy** (Wortsman et al., 2022) ranks members by val mAP50-95,
    starts from the best, and adds each next member only if the averaged soup
    improves val mAP50-95. It is saved as `soup_greedy.pt`. Because it picks
-   members on val, its val scores are optimistic.
+   members on val, its val scores are optimistic; its test scores are the
+   fair comparison.
 
 After averaging, BatchNorm running statistics are re-estimated on
 `soup.bn_recalibration_images` un-augmented training images (default 256; 0
 keeps the averaged statistics). On dental_opg this raised the uniform soup's
 mAP50-95 from 0.728 to 0.754.
 
-Two tables are logged:
+The run ends with one summary table. Each row is a model or method. It
+shows precision, recall, mAP50 and mAP50-95 on val and on test, each
+macro-averaged (an unweighted mean over the classes present in that split),
+plus the val time in seconds:
 
-1. Per-class val metrics: precision, recall, mAP50 and mAP50-95 for every
-   class of every model and method. A class with no val instances shows `-`.
-2. The summary, printed last: the same four metrics, each macro-averaged (an
-   unweighted mean over the classes present in val), plus the val time in
-   seconds.
+```
+                    ------------- val --------------  ------------- test -------------
+  model                  P       R   mAP50  mAP50-95       P       R   mAP50  mAP50-95  val time (s)
+  ----------------  ------  ------  ------  --------  ------  ------  ------  --------  ------------
+  baseline          0.9549  0.9476  0.9621    0.8359  ...
+```
 
-Every model and method is scored the same way. Each model's per-image
-predictions are captured from Ultralytics' own validator (conf 0.001, at most
+Only val scores are used to make choices; the test split is used for
+reporting only. If the dataset has no test split, the test columns are left
+out of the table.
+
+Every model and method is scored the same way on both splits. Each model's
+per-image predictions are captured from Ultralytics' own validator (conf 0.001, at most
 300 detections), so single models reproduce `model.val()` exactly, and the
 ensembles fuse exactly those predictions. The val time is the validator's
 measured preprocess + inference + postprocess time over all val images,
@@ -187,14 +203,16 @@ All models are validated with the soup's `imgsz`, `batch`, `device` and
 Ultralytics' console output is hidden throughout. While a member trains, a
 single `[soup]` line shows the current epoch, batch and running mean losses,
 and is updated in place. When the epoch ends the line is completed and a new
-one starts for the next epoch. A final line per member gives its bag size,
-epoch count, time taken and final training losses. For example:
+one starts for the next epoch. When a fine-tune finishes, one line gives its
+bag size, epoch count, time taken and final training losses, and the next
+lists the checkpoints it saved. For example:
 
 ```
-[soup]  member 1/6 bag1_lighting epoch 1/10: 10 batches in 0m24s  box 0.951 cls 0.802 l1 0.012
-[soup]  member 1/6 bag1_lighting epoch 2/10: batch 6/10  box 0.934 cls 0.790 l1 0.012   <- updating
+[soup]  fine-tune 1/6 bag1_lighting epoch 1/50: 11 batches in 0m05s  box 0.951 cls 0.802 l1 0.012
+[soup]  fine-tune 1/6 bag1_lighting epoch 2/50: batch 6/11  box 0.934 cls 0.790 l1 0.012   <- updating
 ...
-[soup]  member 1/6 bag1_lighting: 592 images, 10 epochs in 4m07s, final train loss box 0.912 cls 0.774 l1 0.011
+[soup]  fine-tune 1/6 bag1_lighting: 666 images, 50 epochs in 4m07s, final train loss box 0.912 cls 0.774 l1 0.011
+[soup]    saved .../scratch/current_soup/bag1_lighting_e{10,20,30,40,50}.pt
 ```
 
 When output is redirected to a file, only the completed epoch lines are
@@ -219,8 +237,9 @@ baseline training. Unknown sections and keys are rejected, so typos fail early.
 | | `bagging_fraction` | Share of training images per bag (default `0.8`) |
 | | `bagging_iterations` | Number of bags (default `2`) |
 | | `seed` | Bag sampling and training seed (default `42`) |
-| | `epochs` | Fine-tune epochs (default `10`) |
+| | `epochs` | Fine-tune epochs (default `10`; the shipped `config.yaml` uses `50`) |
 | | `close_mosaic` | Number of final epochs trained without mosaic (default `2`; `0` keeps mosaic on throughout) |
+| | `checkpoint_interval` | Save a member every N epochs as well as at the final epoch (default `10`; `0` = final epoch only) |
 | | `nms_iou` | IoU above which pooled boxes are suppressed in ensemble/NMS (default `0.7`) |
 | | `wbf_iou` | IoU above which boxes are fused in ensemble/WBF (default `0.55`) |
 | | `bn_recalibration_images` | Training images used to re-estimate BatchNorm statistics of averaged soups (default `256`; `0` = off) |
@@ -297,7 +316,7 @@ flowchart LR
     AUG[soup_configs/*.yaml] --> SOUP
     SOUP --> MEMBERS[(current_soup: members + soups)]
     SOUP --> EVAL[Evaluator]
-    EVAL --> TABLES[per-class table + summary]
+    EVAL --> TABLES[summary: val + test]
 ```
 
 ```mermaid
@@ -330,6 +349,7 @@ classDiagram
         class Evaluator {
             +predict(model_path) Predictions
             +score(name, predictions) EvaluationResult
+            +split str
         }
         class ensemble {
             <<module>>
