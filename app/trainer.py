@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from app import yolo
-from app.config import Config
+from app.config import SampleDatasetsConfig
 from app.log import Log
 
 
@@ -68,8 +68,8 @@ def _format_map(value: float | None) -> str:
 class BaselineTrainer:
     """Train baseline models and publish their best checkpoints."""
 
-    def __init__(self, config: Config) -> None:
-        """Bind the trainer to the application configuration."""
+    def __init__(self, config: SampleDatasetsConfig) -> None:
+        """Bind the trainer to the sample-datasets configuration."""
 
         self.config = config
         self.settings = config.training
@@ -141,12 +141,12 @@ class BaselineTrainer:
     def train_all(self, datasets: Sequence[str] | None = None) -> list[TrainingResult]:
         """Train each selected dataset, continuing past failures.
 
-        `datasets` overrides `training.datasets` from the config; if both are
+        `datasets` overrides `sample_datasets.training.datasets`; if both are
         empty, every configured dataset is trained.
         """
 
-        selected = list(datasets or self.settings.datasets or self.config.datasets)
-        missing = [name for name in selected if name not in self.config.datasets]
+        selected = list(datasets or self.settings.datasets or self.config.sources)
+        missing = [name for name in selected if name not in self.config.sources]
         if missing:
             raise ValueError(f"dataset(s) not configured: {', '.join(missing)}")
 

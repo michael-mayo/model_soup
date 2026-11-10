@@ -1,53 +1,83 @@
 # Central configuration for the soup project.
 # Relative paths are resolved against the directory containing this file.
 
-paths:
-  downloads: scratch/downloads   # downloaded dataset archives
-  datasets: scratch/datasets     # one directory per dataset (raw/, yolo/, runs/, models/)
-  weights: scratch/weights       # pretrained Ultralytics weights
+soup:
+  # Baseline model (.pt) and Ultralytics dataset (data.yaml, or its
+  # directory). Either may be anywhere; they do not have to be sample
+  # datasets. Every model is validated on the dataset's val split.
+  baseline_model: /home/lonrix/model_soup/scratch/datasets/dental_opg/models/baseline_300epochs.pt
+  dataset: /home/lonrix/model_soup/scratch/datasets/dental_opg/yolo/data.yaml
+  # Soup members are written here as bag<i>_<config>.pt. A member whose file
+  # already exists is reused, not retrained; delete it to retrain.
+  output_dir: scratch/current_soup
 
-# Example datasets. Each key must match a converter registered in dataset/__init__.py.
-datasets:
-  fracatlas:
-    url: https://ndownloader.figshare.com/files/43283628
-  kvasir:
-    url: https://datasets.simula.no/downloads/kvasir-seg.zip
-  bccd:
-    url: https://github.com/Shenggan/BCCD_Dataset/archive/refs/heads/master.tar.gz
-  dental_opg:
-    url: https://data.mendeley.com/public-api/zip/c4hhrkxytw/download/4
+  # Bagging and fine-tuning, shared by every member.
+  lr0: 0.002                # much lower than the baseline lr0: fine-tuning only
+  bagging_fraction: 0.8     # share of training images per bag (sampled without replacement)
+  bagging_iterations: 2     # bags drawn; each is fine-tuned once per config file
+  seed: 42                  # bag sampling and training seed
+  epochs: 10
+  close_mosaic: 2           # final epochs trained without mosaic (0 keeps it on throughout)
 
-training:
-  model: yolo26n.pt
+  # Ultralytics run settings for fine-tuning and validation (Ultralytics'
+  # console output is always hidden; each member gets one summary line).
   optimizer: MuSGD
-  lr0: 0.01
-  epochs: 300
-  # FracAtlas val mAP is noisy (only 82 positive val images), so allow a long
-  # plateau before early stopping.
-  patience: 50
-  # Measured at 1.25 GiB for batch 8. At 85% of a 12 GiB GPU this gives an
-  # estimated limit of about 65, so use the practical power-of-two value.
   batch: 64
-  imgsz: 640
+  imgsz: 640                # should match the baseline's training imgsz
   device: 0
-  # Keep dataloading in-process; multiprocessing added memory pressure and
-  # leaked semaphore warnings when the process was killed.
   workers: 0
   amp: true
-  seed: 0
-  plots: true
-  verbose: true
-  # Runs go to <datasets>/<dataset>/runs/<run_name>/ and the best checkpoint
-  # is copied to <datasets>/<dataset>/models/<run_name>.pt.
-  run_name: baseline_300epochs
-  datasets:
-    - fracatlas
-    - kvasir
-    - bccd
-    - dental_opg
 
-soup:
-  # The baseline is <datasets>/<dataset>/models/<baseline>.pt, validated on
-  # that dataset's val split using the training imgsz/batch/device/workers.
-  dataset: dental_opg
-  baseline: baseline_300epochs
+  # Augmentation config files; members = bagging_iterations x len(configs).
+  configs:
+    - soup_configs/lighting.yaml
+    - soup_configs/camera.yaml
+    - soup_configs/geometry.yaml
+
+# Example datasets used to produce sample baseline models for the soup
+# (`main.py prepare` and `main.py train`).
+sample_datasets:
+  paths:
+    downloads: scratch/downloads   # downloaded dataset archives
+    datasets: scratch/datasets     # one directory per dataset (raw/, yolo/, runs/, models/)
+    weights: scratch/weights       # pretrained Ultralytics weights
+
+  # Each key must match a converter registered in dataset/__init__.py.
+  sources:
+    fracatlas:
+      url: https://ndownloader.figshare.com/files/43283628
+    kvasir:
+      url: https://datasets.simula.no/downloads/kvasir-seg.zip
+    bccd:
+      url: https://github.com/Shenggan/BCCD_Dataset/archive/refs/heads/master.tar.gz
+    dental_opg:
+      url: https://data.mendeley.com/public-api/zip/c4hhrkxytw/download/4
+
+  training:
+    model: yolo26n.pt
+    optimizer: MuSGD
+    lr0: 0.01
+    epochs: 300
+    # FracAtlas val mAP is noisy (only 82 positive val images), so allow a long
+    # plateau before early stopping.
+    patience: 50
+    # Measured at 1.25 GiB for batch 8. At 85% of a 12 GiB GPU this gives an
+    # estimated limit of about 65, so use the practical power-of-two value.
+    batch: 64
+    imgsz: 640
+    device: 0
+    # Keep dataloading in-process; multiprocessing added memory pressure and
+    # leaked semaphore warnings when the process was killed.
+    workers: 0
+    amp: true
+    seed: 0
+    plots: true
+    verbose: true
+    # Runs go to <datasets>/<dataset>/runs/<run_name>/ and the best checkpoint
+    # is copied to <datasets>/<dataset>/models/<run_name>.pt.
+    run_name: baseline_300epochs
+    datasets:
+      - fracatlas
+      - kvasir
+      - bccd
+      - dental_opg

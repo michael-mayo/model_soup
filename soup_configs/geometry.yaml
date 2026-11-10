@@ -1,0 +1,22 @@
+# Soup member augmentation: viewpoint, scale and composition.
+#
+# Simulates different camera positions, framing, zoom and object distance,
+# with heavy image mixing (mosaic, MixUp, CutMix) for clutter and partial
+# occlusion. Photometric changes are mild and no extra Albumentations
+# transforms are given, so Ultralytics' light built-in defaults apply.
+#
+# See lighting.yaml for the file format.
+
+ultralytics:
+  hsv_h: 0.015
+  hsv_s: 0.5
+  hsv_v: 0.3
+  degrees: 15.0
+  translate: 0.2
+  scale: 0.7         # wide zoom range: near and far objects
+  shear: 5.0
+  perspective: 0.001
+  fliplr: 0.5
+  mosaic: 1.0
+  mixup: 0.2
+  cutmix: 0.2

@@ -5,8 +5,10 @@
 Soup is an experiment framework for *model soups* (averaging the weights of
 several fine-tuned models) for Ultralytics YOLO object detectors. It downloads
 example medical-imaging datasets, converts them to Ultralytics format, trains
-a baseline detector per dataset, and evaluates the baseline that the soup
-starts from. Weight averaging itself is not implemented yet.
+a baseline detector per dataset, and fine-tunes that baseline into a set of
+diverse *soup members*: each trained on a different random subset of the data
+(bagging) with a different augmentation recipe. Averaging the members' weights
+is not implemented yet.
 
 The four bundled datasets are examples; any dataset can be added by writing a
 converter (see [Adding a dataset](#adding-a-dataset)).
@@ -14,8 +16,8 @@ converter (see [Adding a dataset](#adding-a-dataset)).
 ## Requirements
 
 - Python 3.15 in the `soup` conda environment.
-- An NVIDIA GPU with CUDA for training (`training.device` in `config.yaml`).
-- Pinned Python libraries are listed in `requirements.txt` (Ultralytics, PyTorch, PyYAML, certifi).
+- An NVIDIA GPU with CUDA for training (`soup.device` and `sample_datasets.training.device` in `config.yaml`).
+- Pinned Python libraries are listed in `requirements.txt` (Ultralytics, PyTorch, Albumentations, PyYAML, certifi).
 - Git LFS, if model or image files are ever committed (`.gitattributes` routes them to LFS).
 
 ## Setup
@@ -36,11 +38,12 @@ output until the command exits, so a long training run looks like it hangs.
 
 ```bash
 conda run --no-capture-output -n soup python main.py prepare   # download and convert all datasets
-conda run --no-capture-output -n soup python main.py train     # train baselines for training.datasets
-conda run --no-capture-output -n soup python main.py soup      # evaluate the soup baseline
+conda run --no-capture-output -n soup python main.py train     # train baselines for sample_datasets.training.datasets
+conda run --no-capture-output -n soup python main.py soup      # fine-tune and validate the soup members
 ```
 
-Every command loads `config.yaml` first and logs it. All messages use the
+Every command loads `config.yaml` first and logs the section it uses: `soup` for
+`main.py soup`, and `sample_datasets` for `prepare` and `train`. All messages use the
 format `[module] message`.
 
 Outputs go under `scratch/` (git-ignored):
@@ -53,6 +56,7 @@ Outputs go under `scratch/` (git-ignored):
 | `scratch/datasets/<dataset>/yolo/` | Ultralytics dataset (`data.yaml`, `train/`, `val/`, `test/`) |
 | `scratch/datasets/<dataset>/runs/<run_name>/` | Ultralytics training run (logs, plots, `weights/best.pt`) |
 | `scratch/datasets/<dataset>/models/<run_name>.pt` | Published copy of the run's best checkpoint |
+| `scratch/current_soup/bag<i>_<config>.pt` | Soup members (`soup.output_dir`) |
 
 ## Programs and command-line parameters
 
@@ -71,7 +75,7 @@ extraction is redone automatically.
 
 | Flag | Type | Required | Default | Description |
 |---|---|---|---|---|
-| `--dataset NAME` | string, repeatable | optional | every key under `datasets` | Dataset(s) to prepare |
+| `--dataset NAME` | string, repeatable | optional | every key under `sample_datasets.sources` | Dataset(s) to prepare |
 | `--force` | flag | optional | off | Download again and rebuild from scratch |
 | `--insecure` | flag | optional | off | Disable SSL certificate verification for the download |
 
@@ -83,7 +87,7 @@ conda run --no-capture-output -n soup python main.py prepare --dataset fracatlas
 
 Some dataset hosts (Kvasir in particular) can fail SSL verification behind
 some networks. Use `--insecure` only if you trust the network, or set
-`verify_ssl: false` for that dataset in `config.yaml`.
+`verify_ssl: false` for that dataset under `sample_datasets.sources` in `config.yaml`.
 
 ### `main.py train`
 
@@ -97,7 +101,7 @@ exit code is non-zero if any dataset failed.
 
 | Flag | Type | Required | Default | Description |
 |---|---|---|---|---|
-| `--dataset NAME` | string, repeatable | optional | `training.datasets` (or every dataset if that is empty) | Dataset(s) to train |
+| `--dataset NAME` | string, repeatable | optional | `sample_datasets.training.datasets` (or every source if that is empty) | Dataset(s) to train |
 
 ```bash
 conda run --no-capture-output -n soup python main.py train
@@ -106,9 +110,61 @@ conda run --no-capture-output -n soup python main.py train --dataset dental_opg
 
 ### `main.py soup`
 
-Validates the configured baseline model on its dataset's val split. It uses
-the training `imgsz`, `batch`, `device` and `workers`, then logs the overall
-and per-class mAP50-95.
+Fine-tunes the soup members from the baseline model `soup.baseline_model`
+on the dataset `soup.dataset`, then validates the
+baseline and every member on the val split. It logs two tables:
+
+1. Per-class val metrics: precision, recall, mAP50 and mAP50-95 for every
+   class of every model. A class with no val instances shows `-`.
+2. The summary, printed last: the same four metrics for each model, each
+   macro-averaged (an unweighted mean over the classes present in val).
+
+Steps:
+
+1. For each of `soup.bagging_iterations` bags, a `soup.bagging_fraction`
+   share of the training images is sampled without replacement, seeded by
+   `soup.seed + bag number`.
+2. Each bag is fine-tuned once per augmentation config in `soup.configs`.
+   Fine-tuning uses the soup's `lr0`, `epochs`, `seed`, `optimizer`, `batch`,
+   `imgsz`, `device`, `workers` and `amp`. The
+   defaults give 2 bags x 3 configs = 6 members, named
+   `bag<i>_<config file stem>.pt`.
+3. Mosaic stays on (at each config's `mosaic` probability) except for the
+   last `soup.close_mosaic` epochs (default 2). Ultralytics' own default of 10
+   would turn it off for the whole fine-tune. Fine-tunes also set
+   `warmup_epochs: 0`. An augmentation config may override either. Per-epoch
+   validation is off and each member keeps its last-epoch weights, so the val
+   split is never used to pick a checkpoint.
+4. Ultralytics run folders are written to a temporary directory next to
+   `soup.output_dir` and deleted afterwards; only the member `.pt` files are
+   kept. Each member is saved to `soup.output_dir` as soon as it finishes.
+5. A member whose `.pt` file already exists in `soup.output_dir` is reused,
+   not retrained, so an interrupted run carries on where it stopped. To
+   retrain a member, delete its file. Bags are rebuilt from the same seed, so
+   a retrained member sees exactly the same images. Existing files are not
+   checked against the current settings: after changing `lr0`, `epochs`,
+   `bagging_fraction`, an augmentation config, the baseline or the dataset,
+   delete the old members (or choose a new `output_dir`) to retrain them.
+
+All models are validated on the val split with the soup's `imgsz`, `batch`,
+`device` and `workers`. The soup section is self-contained: it does not read
+anything from `sample_datasets`.
+
+Ultralytics' console output is hidden throughout. While a member trains, a
+single `[soup]` line shows the current epoch, batch and running mean losses,
+and is updated in place. When the epoch ends the line is completed and a new
+one starts for the next epoch. A final line per member gives its bag size,
+epoch count, time taken and final training losses. For example:
+
+```
+[soup]  member 1/6 bag1_lighting epoch 1/10: 10 batches in 0m24s  box 0.951 cls 0.802 l1 0.012
+[soup]  member 1/6 bag1_lighting epoch 2/10: batch 6/10  box 0.934 cls 0.790 l1 0.012   <- updating
+...
+[soup]  member 1/6 bag1_lighting: 592 images, 10 epochs in 4m07s, final train loss box 0.912 cls 0.774 l1 0.011
+```
+
+When output is redirected to a file, only the completed epoch lines are
+written, without the in-place updates.
 
 ```bash
 conda run --no-capture-output -n soup python main.py soup
@@ -116,18 +172,53 @@ conda run --no-capture-output -n soup python main.py soup
 
 ### Configuration (`config.yaml`)
 
-Unknown keys are rejected, so typos fail early.
+The file has two top-level sections. `soup` comes first and configures the
+soup. `sample_datasets` holds everything about the example datasets and their
+baseline training. Unknown sections and keys are rejected, so typos fail early.
 
 | Section | Key | Meaning |
 |---|---|---|
-| `paths` | `downloads`, `datasets`, `weights` | Storage directories (see the outputs table above) |
-| `datasets.<name>` | `url` | Archive download URL |
+| `soup` | `baseline_model` | Path to the baseline `.pt` model, which can be anywhere (default config: the dental_opg baseline) |
+| | `dataset` | Path to an Ultralytics `data.yaml`, or the directory containing it, which can be anywhere (default config: dental_opg). `train` must be one image directory or image-list file. `path:` keys and relative entries are resolved as Ultralytics does |
+| | `output_dir` | Where soup members are written (default `scratch/current_soup`) |
+| | `lr0` | Fine-tune learning rate (default `0.002`) |
+| | `bagging_fraction` | Share of training images per bag (default `0.8`) |
+| | `bagging_iterations` | Number of bags (default `2`) |
+| | `seed` | Bag sampling and training seed (default `42`) |
+| | `epochs` | Fine-tune epochs (default `10`) |
+| | `close_mosaic` | Number of final epochs trained without mosaic (default `2`; `0` keeps mosaic on throughout) |
+| | `optimizer`, `batch`, `imgsz`, `device`, `workers`, `amp` | Ultralytics settings for fine-tuning and validation. `imgsz` should match the baseline's training size |
+| | `configs` | Augmentation config files (see below) |
+| `sample_datasets.paths` | `downloads`, `datasets`, `weights` | Storage directories (see the outputs table above) |
+| `sample_datasets.sources.<name>` | `url` | Archive download URL |
 | | `verify_ssl` | Optional, default `true`; overridden by `prepare --insecure` |
-| `training` | `model` | Pretrained model; a bare `*.pt` name is stored in `paths.weights` |
-| | `optimizer`, `lr0`, `epochs`, `patience`, `batch`, `imgsz`, `device`, `workers`, `amp`, `seed`, `plots`, `verbose` | Passed to Ultralytics `train()`; `imgsz`/`batch`/`device`/`workers` are also used for every validation |
+| `sample_datasets.training` | `model` | Pretrained model; a bare `*.pt` name is stored in `sample_datasets.paths.weights` |
+| | `optimizer`, `lr0`, `epochs`, `patience`, `batch`, `imgsz`, `device`, `workers`, `amp`, `seed`, `plots`, `verbose` | Passed to Ultralytics `train()`; `imgsz`/`batch`/`device`/`workers` are also used to evaluate `best.pt` |
 | | `run_name` | Name of the run directory and published model file |
-| | `datasets` | Datasets trained by default |
-| `soup` | `dataset`, `baseline` | The soup baseline is `<datasets>/<dataset>/models/<baseline>.pt` |
+| | `datasets` | Sample datasets trained by default |
+
+### Soup augmentation configs (`soup_configs/*.yaml`)
+
+Each file defines one augmentation recipe and has two optional sections:
+
+- `ultralytics`: Ultralytics `train()` hyperparameters such as `hsv_v`,
+  `degrees`, `scale`, `perspective`, `bgr`, `mosaic`, `mixup` and `cutmix`.
+  Keys controlled by `config.yaml` are rejected: `epochs`, `lr0`, `seed`,
+  `optimizer`, `batch`, `imgsz`, `device`, `workers`, `amp`, `data`, and the
+  run/output keys.
+- `albumentations`: a list of Albumentations transforms, each written as
+  `transform: <ClassName>` followed by that class's arguments. YAML lists
+  become tuples. If present, they replace Ultralytics' built-in Albumentations
+  defaults, which apply blur, median blur, greyscale and CLAHE at 1% each.
+
+Every file is loaded and its transforms are built before any training
+starts, so mistakes fail early.
+
+| File | Simulates | Main augmentations |
+|---|---|---|
+| `lighting.yaml` | Exposure, contrast, colour temperature, uneven light | Strong HSV value/saturation, brightness/contrast, gamma, tone curve, Planckian jitter, CLAHE, shadows; mild geometry |
+| `camera.yaml` | Different sensors and optics | Gaussian and ISO noise, motion and defocus blur, chromatic aberration, downscaling, JPEG compression, sharpening, greyscale, RGB/BGR swap, slight perspective; mild colour |
+| `geometry.yaml` | Viewpoint, zoom, framing, clutter and occlusion | Rotation ±15°, shear, perspective, wide scale range, translation, mosaic, MixUp, CutMix; mild colour, default Albumentations |
 
 ## Example datasets
 
@@ -146,7 +237,7 @@ Hash splits are derived from the image name, so they are stable across rebuilds.
    and optionally `archive_type` (`"zip"` or `"tar"`) and `split_percentages`.
 2. Implement `convert(raw, writer)`. Call `writer.add(self.split_for(name), image, label_lines)`
    for each image, using `yolo_box()` to build label lines from pixel boxes. Return the class names.
-3. Register the class in `CONVERTERS` in `dataset/__init__.py` and add its `url` under `datasets` in `config.yaml`.
+3. Register the class in `CONVERTERS` in `dataset/__init__.py` and add its `url` under `sample_datasets.sources` in `config.yaml`.
 
 `YoloWriter` validates every label line. It rejects duplicate image names within a
 split and class ids without a name, and it writes `data.yaml` with paths relative
@@ -164,8 +255,10 @@ flowchart LR
     YOLO --> TR
     TR --> MODELS[(datasets/&lt;ds&gt;/models)]
     MAIN -- soup --> SOUP[Soup]
-    MODELS --> SOUP
-    YOLO --> SOUP
+    MODELS -. baseline_model .-> SOUP
+    YOLO -. dataset: bags + val .-> SOUP
+    AUG[soup_configs/*.yaml] --> SOUP
+    SOUP --> MEMBERS[(current_soup)]
 ```
 
 ```mermaid
@@ -173,10 +266,13 @@ classDiagram
     direction LR
     namespace app {
         class Config {
-            +paths PathsConfig
-            +datasets dict~str, DatasetSource~
-            +training TrainingConfig
             +soup SoupConfig
+            +samples SampleDatasetsConfig
+        }
+        class SampleDatasetsConfig {
+            +paths PathsConfig
+            +sources dict~str, DatasetSource~
+            +training TrainingConfig
             +layout(dataset) DatasetLayout
         }
         class DatasetLayout {
@@ -188,8 +284,14 @@ classDiagram
             +train_all(datasets) list~TrainingResult~
         }
         class Soup {
-            +evaluate(model_path, data_yaml) EvaluationResult
-            +evaluate_baseline() EvaluationResult
+            +train_members() list~Path~
+            +evaluate(name, model_path) EvaluationResult
+            +run() list~EvaluationResult~
+        }
+        class AugmentationConfig {
+            +train_args dict
+            +transforms tuple
+            +build_transforms() list
         }
         class Log {
             +message(text)
@@ -212,9 +314,11 @@ classDiagram
         class Bccd
         class DentalOpg
     }
-    Config ..> DatasetLayout : creates
-    BaselineTrainer --> Config : reads
+    Config *-- SampleDatasetsConfig
+    SampleDatasetsConfig ..> DatasetLayout : creates
+    BaselineTrainer --> SampleDatasetsConfig : reads
     Soup --> Config : reads
+    Soup ..> AugmentationConfig : loads
     Dataset --> DatasetLayout : writes to
     Dataset ..> YoloWriter : creates
     FracAtlas --|> Dataset
@@ -232,6 +336,7 @@ console output, and reading class names.
 ```
 main.py          Command-line entry point (prepare / train / soup)
 config.yaml      All settings
+soup_configs/    Augmentation recipes for soup members
 app/             Configuration, logging, Ultralytics helpers, training, soup
 dataset/         Dataset base class, YOLO writer, and one converter per example dataset
 scratch/         Downloads, datasets, runs, models and weights (git-ignored)

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from app.config import Config
+from app.config import SampleDatasetsConfig
 from dataset.base import Dataset
 from dataset.bccd import Bccd
 from dataset.dental_opg import DentalOpg
@@ -14,11 +14,11 @@ from dataset.kvasir import Kvasir
 CONVERTERS: dict[str, type[Dataset]] = {cls.key: cls for cls in (FracAtlas, Kvasir, Bccd, DentalOpg)}
 
 
-def create(name: str, config: Config) -> Dataset:
+def create(name: str, config: SampleDatasetsConfig) -> Dataset:
     """Create the converter for dataset `name`, bound to its configured source and layout."""
 
     if name not in CONVERTERS:
         raise ValueError(f"no converter for dataset {name!r}; known: {', '.join(CONVERTERS)}")
-    if name not in config.datasets:
-        raise ValueError(f"dataset {name!r} has no entry under `datasets` in config.yaml")
-    return CONVERTERS[name](config.datasets[name], config.layout(name), config.paths.downloads)
+    if name not in config.sources:
+        raise ValueError(f"dataset {name!r} has no entry under `sample_datasets.sources` in config.yaml")
+    return CONVERTERS[name](config.sources[name], config.layout(name), config.paths.downloads)

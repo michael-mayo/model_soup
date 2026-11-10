@@ -18,14 +18,17 @@ from app.trainer import BaselineTrainer, log_summary
 
 LOG = Log("main")
 
+# The config.yaml section each command reads (and logs at startup).
+COMMAND_SECTIONS = {"prepare": "sample_datasets", "train": "sample_datasets", "soup": "soup"}
+
 
 def _prepare(config: Config, args: argparse.Namespace) -> int:
     """Prepare the selected datasets (all configured ones by default)."""
 
     failures = 0
-    for name in args.datasets or list(config.datasets):
+    for name in args.datasets or list(config.samples.sources):
         try:
-            dataset.create(name, config).prepare(force=args.force, verify_ssl=False if args.insecure else None)
+            dataset.create(name, config.samples).prepare(force=args.force, verify_ssl=False if args.insecure else None)
         except (OSError, ValueError, KeyError, TypeError, tarfile.TarError, zipfile.BadZipFile) as exc:
             LOG.error(f"{name}: {exc}")
             failures += 1
@@ -35,15 +38,15 @@ def _prepare(config: Config, args: argparse.Namespace) -> int:
 def _train(config: Config, args: argparse.Namespace) -> int:
     """Train baselines for the selected datasets and log a summary."""
 
-    results = BaselineTrainer(config).train_all(args.datasets)
+    results = BaselineTrainer(config.samples).train_all(args.datasets)
     log_summary(results)
     return 0 if all(result.ok for result in results) else 1
 
 
 def _soup(config: Config, args: argparse.Namespace) -> int:
-    """Evaluate the configured soup baseline."""
+    """Fine-tune the soup members, then validate them and the baseline."""
 
-    Soup(config).evaluate_baseline()
+    Soup(config).run()
     return 0
 
 
@@ -63,10 +66,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     train = commands.add_parser("train", help="train baseline detectors")
     train.add_argument("--dataset", action="append", dest="datasets", metavar="NAME",
-                       help="dataset to train; repeat for several (default: training.datasets)")
+                       help="dataset to train; repeat for several (default: sample_datasets.training.datasets)")
     train.set_defaults(handler=_train)
 
-    soup = commands.add_parser("soup", help="evaluate the soup's baseline model")
+    soup = commands.add_parser("soup", help="fine-tune and validate the soup members")
     soup.set_defaults(handler=_soup)
     return parser
 
@@ -81,8 +84,10 @@ def main(argv: list[str] | None = None) -> int:
         LOG.error(f"could not read {args.config}: {exc}")
         return 1
 
+    # Show only the config section the command uses.
+    section = COMMAND_SECTIONS[args.command]
     LOG.message(f"system initialising: {args.command}")
-    for line in yaml.safe_dump(config.raw, sort_keys=False).rstrip().splitlines():
+    for line in yaml.safe_dump({section: config.raw.get(section)}, sort_keys=False).rstrip().splitlines():
         LOG.message(line)
 
     try:

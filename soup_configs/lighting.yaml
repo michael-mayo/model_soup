@@ -1,0 +1,47 @@
+# Soup member augmentation: illumination and exposure.
+#
+# Simulates images taken under different lighting: over/under-exposure,
+# contrast and gamma differences between devices, colour temperature of the
+# light source, uneven illumination and shadows. Geometry is kept mild so the
+# member specialises in photometric robustness.
+#
+# `ultralytics`: Ultralytics train() hyperparameters (see its default.yaml).
+# `albumentations`: Albumentations transforms, each `transform: <ClassName>`
+# plus that class's arguments (lists become tuples). These replace
+# Ultralytics' built-in Albumentations defaults.
+
+ultralytics:
+  hsv_h: 0.02        # hue shift (colour cast)
+  hsv_s: 0.8         # saturation
+  hsv_v: 0.6         # brightness / exposure
+  degrees: 0.0
+  translate: 0.1
+  scale: 0.3
+  shear: 0.0
+  perspective: 0.0
+  fliplr: 0.5
+  mosaic: 1.0
+  mixup: 0.0
+  cutmix: 0.0
+
+albumentations:
+  - transform: RandomBrightnessContrast
+    brightness_limit: [-0.3, 0.3]
+    contrast_limit: [-0.3, 0.3]
+    p: 0.5
+  - transform: RandomGamma          # display/sensor response curve
+    gamma_limit: [60, 160]
+    p: 0.4
+  - transform: RandomToneCurve      # camera tone mapping
+    scale: 0.2
+    p: 0.3
+  - transform: PlanckianJitter      # light-source colour temperature
+    mode: blackbody
+    p: 0.3
+  - transform: CLAHE                # locally equalised / enhanced exports
+    clip_limit: [1, 4]
+    p: 0.2
+  - transform: RandomShadow         # uneven illumination
+    shadow_roi: [0, 0, 1, 1]
+    num_shadows_limit: [1, 2]
+    p: 0.15

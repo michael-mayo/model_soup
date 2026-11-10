@@ -23,6 +23,22 @@ class Log:
 
         print(f"{self.label} {text}", file=stream or sys.stdout, flush=True)
 
+    def progress(self, text: str, *, stream: TextIO | None = None, final: bool = False) -> None:
+        """Rewrite the current terminal line with `text`.
+
+        Intermediate updates end without a newline so the next call replaces
+        them; `final=True` ends the line. When the stream is not a terminal
+        (e.g. redirected to a file), only final lines are written.
+        """
+
+        destination = stream or sys.stdout
+        if destination.isatty():
+            # Carriage return plus "erase to end of line" overwrites the previous update.
+            end = "\n" if final else ""
+            print(f"\r\x1b[K{self.label} {text}", end=end, file=destination, flush=True)
+        elif final:
+            print(f"{self.label} {text}", file=destination, flush=True)
+
     def error(self, text: str, *, stream: TextIO | None = None) -> None:
         """Write an error message to stderr (or `stream`)."""
 
