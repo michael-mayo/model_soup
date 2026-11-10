@@ -7,8 +7,10 @@ several fine-tuned models) for Ultralytics YOLO object detectors. It downloads
 example medical-imaging datasets, converts them to Ultralytics format, trains
 a baseline detector per dataset, and fine-tunes that baseline into a set of
 diverse *soup members*: each trained on a different random subset of the data
-(bagging) with a different augmentation recipe. Averaging the members' weights
-is not implemented yet.
+(bagging) with a different augmentation recipe. The members are then combined
+by output ensembling (NMS and weighted boxes fusion), which serve as baselines,
+and by weight averaging (uniform and greedy soups). Everything is compared on
+the val split, including how long each takes to validate.
 
 The four bundled datasets are examples; any dataset can be added by writing a
 converter (see [Adding a dataset](#adding-a-dataset)).
@@ -57,6 +59,7 @@ Outputs go under `scratch/` (git-ignored):
 | `scratch/datasets/<dataset>/runs/<run_name>/` | Ultralytics training run (logs, plots, `weights/best.pt`) |
 | `scratch/datasets/<dataset>/models/<run_name>.pt` | Published copy of the run's best checkpoint |
 | `scratch/current_soup/bag<i>_<config>.pt` | Soup members (`soup.output_dir`) |
+| `scratch/current_soup/soup_uniform.pt`, `soup_greedy.pt` | Averaged soups, rebuilt on every run |
 
 ## Programs and command-line parameters
 
@@ -111,15 +114,10 @@ conda run --no-capture-output -n soup python main.py train --dataset dental_opg
 ### `main.py soup`
 
 Fine-tunes the soup members from the baseline model `soup.baseline_model`
-on the dataset `soup.dataset`, then validates the
-baseline and every member on the val split. It logs two tables:
+on the dataset `soup.dataset`, combines them, and validates everything on the
+val split.
 
-1. Per-class val metrics: precision, recall, mAP50 and mAP50-95 for every
-   class of every model. A class with no val instances shows `-`.
-2. The summary, printed last: the same four metrics for each model, each
-   macro-averaged (an unweighted mean over the classes present in val).
-
-Steps:
+Training steps:
 
 1. For each of `soup.bagging_iterations` bags, a `soup.bagging_fraction`
    share of the training images is sampled without replacement, seeded by
@@ -146,9 +144,45 @@ Steps:
    `bagging_fraction`, an augmentation config, the baseline or the dataset,
    delete the old members (or choose a new `output_dir`) to retrain them.
 
-All models are validated on the val split with the soup's `imgsz`, `batch`,
-`device` and `workers`. The soup section is self-contained: it does not read
-anything from `sample_datasets`.
+Combining and validation steps, in table order:
+
+1. **baseline** and each **member** are validated.
+2. **ensemble/NMS** pools every member's detections per image and applies
+   class-wise NMS at `soup.nms_iou`.
+3. **ensemble/WBF** fuses every member's detections with weighted boxes
+   fusion at `soup.wbf_iou`. Clustered boxes are confidence-weighted
+   averages, and boxes found by few members are down-weighted.
+4. **soup/uniform** averages all members' weights into one model, saved as
+   `soup_uniform.pt` in `soup.output_dir`.
+5. **soup/greedy** (Wortsman et al., 2022) ranks members by val mAP50-95,
+   starts from the best, and adds each next member only if the averaged soup
+   improves val mAP50-95. It is saved as `soup_greedy.pt`. Because it picks
+   members on val, its val scores are optimistic.
+
+After averaging, BatchNorm running statistics are re-estimated on
+`soup.bn_recalibration_images` un-augmented training images (default 256; 0
+keeps the averaged statistics). On dental_opg this raised the uniform soup's
+mAP50-95 from 0.728 to 0.754.
+
+Two tables are logged:
+
+1. Per-class val metrics: precision, recall, mAP50 and mAP50-95 for every
+   class of every model and method. A class with no val instances shows `-`.
+2. The summary, printed last: the same four metrics, each macro-averaged (an
+   unweighted mean over the classes present in val), plus the val time in
+   seconds.
+
+Every model and method is scored the same way. Each model's per-image
+predictions are captured from Ultralytics' own validator (conf 0.001, at most
+300 detections), so single models reproduce `model.val()` exactly, and the
+ensembles fuse exactly those predictions. The val time is the validator's
+measured preprocess + inference + postprocess time over all val images,
+excluding model loading and warm-up. For an ensemble it is the sum over all
+members plus the fusion time, which is the cost of running it.
+
+All models are validated with the soup's `imgsz`, `batch`, `device` and
+`workers`. The soup section is self-contained: it does not read anything from
+`sample_datasets`.
 
 Ultralytics' console output is hidden throughout. While a member trains, a
 single `[soup]` line shows the current epoch, batch and running mean losses,
@@ -179,14 +213,17 @@ baseline training. Unknown sections and keys are rejected, so typos fail early.
 | Section | Key | Meaning |
 |---|---|---|
 | `soup` | `baseline_model` | Path to the baseline `.pt` model, which can be anywhere (default config: the dental_opg baseline) |
-| | `dataset` | Path to an Ultralytics `data.yaml`, or the directory containing it, which can be anywhere (default config: dental_opg). `train` must be one image directory or image-list file. `path:` keys and relative entries are resolved as Ultralytics does |
-| | `output_dir` | Where soup members are written (default `scratch/current_soup`) |
+| | `dataset` | Path to an Ultralytics `data.yaml`, or the directory containing it, which can be anywhere (default config: dental_opg). Splits may be image directories, image-list files or lists of these. `path:` keys and relative entries are resolved as Ultralytics does |
+| | `output_dir` | Where soup members and the `soup_uniform.pt`/`soup_greedy.pt` soups are written (default `scratch/current_soup`) |
 | | `lr0` | Fine-tune learning rate (default `0.002`) |
 | | `bagging_fraction` | Share of training images per bag (default `0.8`) |
 | | `bagging_iterations` | Number of bags (default `2`) |
 | | `seed` | Bag sampling and training seed (default `42`) |
 | | `epochs` | Fine-tune epochs (default `10`) |
 | | `close_mosaic` | Number of final epochs trained without mosaic (default `2`; `0` keeps mosaic on throughout) |
+| | `nms_iou` | IoU above which pooled boxes are suppressed in ensemble/NMS (default `0.7`) |
+| | `wbf_iou` | IoU above which boxes are fused in ensemble/WBF (default `0.55`) |
+| | `bn_recalibration_images` | Training images used to re-estimate BatchNorm statistics of averaged soups (default `256`; `0` = off) |
 | | `optimizer`, `batch`, `imgsz`, `device`, `workers`, `amp` | Ultralytics settings for fine-tuning and validation. `imgsz` should match the baseline's training size |
 | | `configs` | Augmentation config files (see below) |
 | `sample_datasets.paths` | `downloads`, `datasets`, `weights` | Storage directories (see the outputs table above) |
@@ -258,7 +295,9 @@ flowchart LR
     MODELS -. baseline_model .-> SOUP
     YOLO -. dataset: bags + val .-> SOUP
     AUG[soup_configs/*.yaml] --> SOUP
-    SOUP --> MEMBERS[(current_soup)]
+    SOUP --> MEMBERS[(current_soup: members + soups)]
+    SOUP --> EVAL[Evaluator]
+    EVAL --> TABLES[per-class table + summary]
 ```
 
 ```mermaid
@@ -285,8 +324,22 @@ classDiagram
         }
         class Soup {
             +train_members() list~Path~
-            +evaluate(name, model_path) EvaluationResult
+            +combine(members) list~EvaluationResult~
             +run() list~EvaluationResult~
+        }
+        class Evaluator {
+            +predict(model_path) Predictions
+            +score(name, predictions) EvaluationResult
+        }
+        class ensemble {
+            <<module>>
+            +ensemble_nms(members, iou) Predictions
+            +ensemble_wbf(members, iou) Predictions
+        }
+        class merging {
+            <<module>>
+            +build_soup(paths, target, ...) Path
+            +greedy_selection(ranked, ...) list~Path~
         }
         class AugmentationConfig {
             +train_args dict
@@ -319,6 +372,9 @@ classDiagram
     BaselineTrainer --> SampleDatasetsConfig : reads
     Soup --> Config : reads
     Soup ..> AugmentationConfig : loads
+    Soup --> Evaluator : scores with
+    Soup --> ensemble : fuses with
+    Soup --> merging : averages with
     Dataset --> DatasetLayout : writes to
     Dataset ..> YoloWriter : creates
     FracAtlas --|> Dataset
@@ -337,7 +393,9 @@ console output, and reading class names.
 main.py          Command-line entry point (prepare / train / soup)
 config.yaml      All settings
 soup_configs/    Augmentation recipes for soup members
-app/             Configuration, logging, Ultralytics helpers, training, soup
+app/             Configuration, logging, Ultralytics helpers, baseline training, and the soup:
+                 soup.py (members, orchestration), evaluation.py (val scoring, tables),
+                 ensemble.py (NMS/WBF), merging.py (weight averaging, greedy soup)
 dataset/         Dataset base class, YOLO writer, and one converter per example dataset
 scratch/         Downloads, datasets, runs, models and weights (git-ignored)
 ```

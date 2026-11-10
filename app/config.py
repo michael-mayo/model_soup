@@ -110,6 +110,10 @@ class SoupConfig(RunSettings):
     directory means its data.yaml); neither needs to belong to the sample
     datasets. The inherited run settings apply to fine-tuning and validation.
 
+    `nms_iou` and `wbf_iou` configure the two output ensembles, and
+    `bn_recalibration_images` training images re-estimate the BatchNorm
+    statistics of averaged soups (0 keeps the averaged statistics).
+
     Each of `bagging_iterations` bags (a random `bagging_fraction` of the
     training images) is fine-tuned once per augmentation config file, giving
     `bagging_iterations * len(configs)` members.
@@ -124,6 +128,9 @@ class SoupConfig(RunSettings):
     seed: int = 42
     epochs: int = 10
     close_mosaic: int = 2
+    nms_iou: float = 0.7
+    wbf_iou: float = 0.55
+    bn_recalibration_images: int = 256
     configs: tuple[Path, ...] = ()
 
     def __post_init__(self) -> None:
@@ -131,6 +138,10 @@ class SoupConfig(RunSettings):
 
         if not 0.0 < self.bagging_fraction <= 1.0:
             raise ValueError("soup.bagging_fraction must be in (0, 1]")
+        if not (0.0 < self.nms_iou < 1.0 and 0.0 < self.wbf_iou < 1.0):
+            raise ValueError("soup.nms_iou and soup.wbf_iou must be in (0, 1)")
+        if self.bn_recalibration_images < 0:
+            raise ValueError("soup.bn_recalibration_images must be 0 or more")
         if not 0 <= self.close_mosaic <= self.epochs:
             raise ValueError("soup.close_mosaic must be between 0 and soup.epochs")
         if self.bagging_iterations < 1 or self.epochs < 1 or self.lr0 <= 0:

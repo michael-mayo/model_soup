@@ -28,6 +28,12 @@ soup:
   workers: 0
   amp: true
 
+  # Combining members. Ensembles fuse every member's detections; soups
+  # average member weights into one model.
+  nms_iou: 0.7                  # ensemble/NMS: IoU above which pooled boxes are suppressed
+  wbf_iou: 0.55                 # ensemble/WBF: IoU above which boxes are fused
+  bn_recalibration_images: 256  # training images used to re-estimate BatchNorm statistics of soups (0 = off)
+
   # Augmentation config files; members = bagging_iterations x len(configs).
   configs:
     - soup_configs/lighting.yaml

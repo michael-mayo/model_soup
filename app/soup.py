@@ -1,8 +1,9 @@
-"""Model soup: bagged, augmentation-diverse fine-tunes of a baseline model.
+"""Model soup: bagged, augmentation-diverse fine-tunes of a baseline, and ways to combine them.
 
 Each soup member is the baseline fine-tuned on one bag (a random subset of the
-training images) with one augmentation config. Members are evaluated the
-same way as the baseline. Weight averaging is not implemented yet.
+training images) with one augmentation config. The members are then combined
+by output ensembling (NMS, WBF) and by weight averaging (uniform and greedy
+soups), and everything is scored the same way on the val split.
 """
 
 from __future__ import annotations
@@ -13,15 +14,15 @@ import shutil
 import sys
 import tempfile
 import time
-from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, TextIO
 
 import yaml
 
-from app import yolo
+from app import ensemble, merging, yolo
 from app.config import Config
+from app.evaluation import EvaluationResult, Evaluator, Predictions, log_tables, split_images
 from app.log import Log
 
 
@@ -154,70 +155,18 @@ class EpochProgress:
         LOG.progress(self._text(trainer, f"{self.batch} batches in {elapsed}"), stream=self.stream, final=True)
 
 
-@dataclass(frozen=True)
-class ClassMetrics:
-    """Val-split detection metrics for one class (or their macro average)."""
-
-    precision: float
-    recall: float
-    map50: float
-    map50_95: float
-
-
-@dataclass(frozen=True)
-class EvaluationResult:
-    """Val-split metrics for one model.
-
-    `per_class` maps every class name to its metrics, or to `None` when the
-    val split has no instances of that class.
-    """
-
-    name: str
-    model_path: Path
-    per_class: dict[str, ClassMetrics | None]
-
-    @property
-    def macro(self) -> ClassMetrics:
-        """Unweighted mean over the classes present in the val split."""
-
-        present = [metrics for metrics in self.per_class.values() if metrics is not None]
-        if not present:
-            return ClassMetrics(0.0, 0.0, 0.0, 0.0)
-        return ClassMetrics(*(
-            sum(getattr(metrics, key) for metrics in present) / len(present)
-            for key in ("precision", "recall", "map50", "map50_95")
-        ))
-
-
 def make_bag(data_yaml: Path, fraction: float, seed: int, bag_dir: Path) -> tuple[Path, int]:
     """Create a bagged copy of the dataset and return its data.yaml and image count.
 
     A `fraction` of the training images is sampled without replacement. The
     bag holds symlinks to the original images and labels (Ultralytics finds
     labels by swapping `images` for `labels` in the path), and validates on
-    the original val split. `train` may be an image directory or an image-list
-    file, resolved the way Ultralytics resolves it.
+    the original val images, listed in a file.
     """
 
-    from ultralytics.data.utils import IMG_FORMATS, img2label_paths
+    from ultralytics.data.utils import img2label_paths
 
-    data = yaml.safe_load(data_yaml.read_text(encoding="utf-8"))
-    # Ultralytics resolves split paths against `path`, which defaults to the YAML's directory.
-    root = Path(data.get("path") or data_yaml.parent)
-    root = root if root.is_absolute() else (data_yaml.parent / root)
-
-    def resolve(value: str) -> Path:
-        path = Path(value)
-        return (path if path.is_absolute() else root / path).resolve()
-
-    if not isinstance(data.get("train"), str) or "val" not in data:
-        raise ValueError(f"{data_yaml}: bagging needs a single `train` path and a `val` entry")
-    train = resolve(data["train"])
-    if train.is_dir():
-        candidates = list(train.rglob("*"))
-    else:  # an Ultralytics image-list file
-        candidates = [resolve(line.strip()) for line in train.read_text(encoding="utf-8").splitlines() if line.strip()]
-    train_images = sorted(path for path in candidates if path.suffix[1:].lower() in IMG_FORMATS and path.is_file())
+    train_images = split_images(data_yaml, "train")
     if not train_images:
         raise FileNotFoundError(f"no training images found for {data_yaml}")
     sample = random.Random(seed).sample(train_images, max(1, round(len(train_images) * fraction)))
@@ -232,12 +181,13 @@ def make_bag(data_yaml: Path, fraction: float, seed: int, bag_dir: Path) -> tupl
         if Path(label).is_file():
             (labels_dir / f"{name}.txt").symlink_to(Path(label).resolve())
 
+    val_list = bag_dir / "val.txt"
+    val_list.write_text("".join(f"{path}\n" for path in split_images(data_yaml, "val")), encoding="utf-8")
+    names = yaml.safe_load(data_yaml.read_text(encoding="utf-8"))["names"]
     bag_yaml = bag_dir / "data.yaml"
-    bag_yaml.write_text(yaml.safe_dump({
-        "train": str(images_dir.resolve()),
-        "val": [str(resolve(value)) for value in val] if isinstance(val := data["val"], list) else str(resolve(val)),
-        "names": data["names"],
-    }, sort_keys=False), encoding="utf-8")
+    bag_yaml.write_text(yaml.safe_dump(
+        {"train": str(images_dir.resolve()), "val": str(val_list.resolve()), "names": names}, sort_keys=False,
+    ), encoding="utf-8")
     return bag_yaml, len(sample)
 
 
@@ -257,31 +207,6 @@ class Soup:
         names = [augmentation.name for augmentation in self.augmentations]
         if len(set(names)) != len(names):
             raise ValueError("soup.configs file names must be unique")
-
-    def evaluate(self, name: str, model_path: Path) -> EvaluationResult:
-        """Validate `model_path` on the dataset's val split.
-
-        Uses the soup's imgsz/batch/device/workers so that every model is
-        measured under the same conditions. Ultralytics output is suppressed.
-        """
-
-        if not model_path.is_file():
-            raise FileNotFoundError(f"model not found: {model_path}")
-        if not self.data_yaml.is_file():
-            raise FileNotFoundError(f"dataset YAML not found: {self.data_yaml}")
-        with yolo.quiet():
-            model = yolo.load_model(model_path)
-            results = model.val(
-                data=str(self.data_yaml), split="val", plots=False, verbose=False,
-                **self.settings.eval_kwargs(),
-            )
-        names = yolo.class_names(model)
-        per_class: dict[str, ClassMetrics | None] = dict.fromkeys(names.values())
-        # Only classes with val instances have results; box.maps would fill
-        # the others with the overall mAP.
-        for position, class_index in enumerate(results.ap_class_index):
-            per_class[names[int(class_index)]] = ClassMetrics(*(float(value) for value in results.box.class_result(position)))
-        return EvaluationResult(name=name, model_path=model_path, per_class=per_class)
 
     def _fine_tune(
         self, augmentation: AugmentationConfig, data_yaml: Path, work_dir: Path, name: str, label: str,
@@ -379,14 +304,94 @@ class Soup:
         LOG.message(f"{trained} members trained, {len(members) - trained} reused, in {output_dir}")
         return members
 
+    def _evaluate(self, evaluator: Evaluator, name: str, path: Path) -> tuple[EvaluationResult, Predictions]:
+        """Evaluate one model on val and log a one-line result."""
+
+        result, predictions = evaluator.evaluate(name, path)
+        LOG.message(f"  {name}: mAP50-95 {result.macro.map50_95:.4f}, val time {result.seconds:.3f}s")
+        return result, predictions
+
+    def _build_soup(self, members: list[Path], target: Path, calibration: list[Path]) -> Path:
+        """Average `members` into `target`, recalibrating BatchNorm on `calibration` images."""
+
+        settings = self.settings
+        with yolo.quiet():
+            return merging.build_soup(
+                members, target, calibration_images=calibration, imgsz=settings.imgsz,
+                batch=min(int(settings.batch), 32), device=settings.device,
+            )
+
+    def combine(self, members: list[Path]) -> tuple[list[EvaluationResult], list[str]]:
+        """Evaluate the baseline, members, ensembles and soups on val.
+
+        Returns the results in table order and notes for the summary. Soup
+        checkpoints are saved next to the members as soup_uniform.pt and
+        soup_greedy.pt.
+        """
+
+        settings = self.settings
+        evaluator = Evaluator(self.data_yaml, settings)
+        LOG.message(f"validating on {len(evaluator.images)} val images")
+        results = [self._evaluate(evaluator, "baseline", self.baseline_path)[0]]
+        member_results: dict[Path, EvaluationResult] = {}
+        member_predictions: list[Predictions] = []
+        for path in members:
+            result, predictions = self._evaluate(evaluator, path.stem, path)
+            member_results[path] = result
+            member_predictions.append(predictions)
+        results += member_results.values()
+
+        for name, fuse, iou in (("ensemble/NMS", ensemble.ensemble_nms, settings.nms_iou),
+                                ("ensemble/WBF", ensemble.ensemble_wbf, settings.wbf_iou)):
+            result = evaluator.score(name, fuse(member_predictions, iou))
+            LOG.message(f"  {name}: mAP50-95 {result.macro.map50_95:.4f}, val time {result.seconds:.3f}s")
+            results.append(result)
+
+        calibration = merging.sample_images(
+            split_images(self.data_yaml, "train"), settings.bn_recalibration_images, settings.seed,
+        )
+        uniform = self._build_soup(members, settings.output_dir / "soup_uniform.pt", calibration)
+        results.append(self._evaluate(evaluator, "soup/uniform", uniform)[0])
+
+        # Greedy soup: try members best-first, keeping each only if the soup improves on val.
+        ranked = sorted(members, key=lambda path: member_results[path].macro.map50_95, reverse=True)
+        LOG.message(f"greedy soup: starting from {ranked[0].stem}")
+        trials: dict[tuple[Path, ...], EvaluationResult] = {}
+        with tempfile.TemporaryDirectory(prefix=".soup-greedy-", dir=settings.output_dir.parent) as work:
+            def score_subset(subset: list[Path]) -> float:
+                candidate = self._build_soup(subset, Path(work) / "candidate.pt", calibration)
+                result, _ = evaluator.evaluate("soup/greedy", candidate)
+                trials[tuple(subset)] = result
+                return result.macro.map50_95
+
+            def report(path: Path, score: float, kept: bool) -> None:
+                LOG.message(f"  + {path.stem}: mAP50-95 {score:.4f}, {'kept' if kept else 'rejected'}")
+
+            selected = merging.greedy_selection(
+                ranked, member_results[ranked[0]].macro.map50_95, score_subset, report,
+            )
+        greedy_path = settings.output_dir / "soup_greedy.pt"
+        if len(selected) == 1:
+            shutil.copy2(selected[0], greedy_path)
+            greedy = member_results[selected[0]]
+        else:
+            self._build_soup(selected, greedy_path, calibration)
+            greedy = trials[tuple(selected)]
+        LOG.message(f"greedy soup: {len(selected)} of {len(members)} members ({', '.join(p.stem for p in selected)})")
+        results.append(EvaluationResult("soup/greedy", greedy.per_class, greedy.seconds))
+
+        notes = [
+            "ensemble val time includes every member's predictions plus fusion",
+            "soup/greedy chose its members on val, so its val scores are optimistic",
+        ]
+        return results, notes
+
     def run(self) -> list[EvaluationResult]:
-        """Train all members, then evaluate the baseline and every member and log the tables."""
+        """Train any missing members, then evaluate everything and log the tables."""
 
         members = self.train_members()
-        LOG.message("validating baseline and soup members")
-        results = [self.evaluate("baseline", self.baseline_path)]
-        results += [self.evaluate(path.stem, path) for path in members]
-        log_tables(results)
+        results, notes = self.combine(members)
+        log_tables(results, notes)
         return results
 
 
@@ -412,51 +417,3 @@ def _duration(seconds: float) -> str:
 
     minutes, seconds = divmod(round(seconds), 60)
     return f"{minutes}m{seconds:02d}s"
-
-
-def _table(headers: Sequence[str], rows: Sequence[Sequence[str]], *, text_columns: int = 1) -> list[str]:
-    """Format rows with the first `text_columns` left-aligned and the rest right-aligned."""
-
-    widths = [max(len(str(cell)) for cell in column) for column in zip(headers, *rows)]
-    lines = []
-    for row in (headers, *rows):
-        cells = [
-            str(cell).ljust(width) if index < text_columns else str(cell).rjust(width)
-            for index, (cell, width) in enumerate(zip(row, widths))
-        ]
-        lines.append("  ".join(cells))
-    lines.insert(1, "  ".join("-" * width for width in widths))
-    return lines
-
-
-# Column headers shared by both tables.
-METRIC_HEADERS = ("P", "R", "mAP50", "mAP50-95")
-
-
-def _metric_cells(metrics: ClassMetrics | None) -> tuple[str, ...]:
-    """Format one row's metric cells, or dashes for a class absent from val."""
-
-    if metrics is None:
-        return ("-",) * len(METRIC_HEADERS)
-    return tuple(f"{value:.4f}" for value in (metrics.precision, metrics.recall, metrics.map50, metrics.map50_95))
-
-
-def log_tables(results: Sequence[EvaluationResult]) -> None:
-    """Log the per-model per-class table, then the macro-averaged summary last.
-
-    All scores are on the val split. The summary averages each metric over
-    the classes present in val, without weighting by instance count.
-    """
-
-    LOG.message("per-class val metrics")
-    rows = []
-    for result in results:
-        for index, (class_name, metrics) in enumerate(result.per_class.items()):
-            # Show the model name only on its first row so groups stand out.
-            rows.append((result.name if index == 0 else "", class_name, *_metric_cells(metrics)))
-    for line in _table(("model", "class", *METRIC_HEADERS), rows, text_columns=2):
-        LOG.message(f"  {line}")
-
-    LOG.message("summary: macro-averaged val metrics")
-    for line in _table(("model", *METRIC_HEADERS), [(r.name, *_metric_cells(r.macro)) for r in results]):
-        LOG.message(f"  {line}")
